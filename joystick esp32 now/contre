@@ -1,0 +1,171 @@
+#include <WiFi.h>
+#include <esp_now.h>
+
+// =====================================
+// JOYSTICK PINS
+// =====================================
+const int joystickXPin = 18;
+const int joystickYPin = 19;
+
+// =====================================
+// CALIBRATION & RAMPING SETTINGS
+// =====================================
+int centerX = 0;
+int centerY = 0;
+const int deadzone = 400;
+
+// RAMPING: Adjust this to change how smooth/fast the acceleration is.
+// Higher value = faster changes. Lower value = smoother acceleration.
+const int MAX_SPEED_CHANGE = 15; 
+
+// Track the current actual speed of the rover to smooth out changes
+int currentSpeed = 0; 
+
+// =====================================
+// PACKET
+// =====================================
+struct ControlPacket
+{
+    char command;
+    int speed;
+};
+
+ControlPacket packet;
+
+// =====================================
+// ROVER MAC ADDRESS
+// =====================================
+uint8_t roverMAC[] = {0x2C, 0xBC, 0xBB, 0x06, 0xDC, 0xF0};
+
+// =====================================
+void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
+{
+    if(status == ESP_NOW_SEND_SUCCESS)
+    {
+        Serial.println("Packet Sent");
+    }
+    else
+    {
+        Serial.println("Send Failed");
+    }
+}
+
+// =====================================
+void setup()
+{
+    Serial.begin(115200);
+
+    analogSetAttenuation(ADC_ATTEN_DB_12);
+
+    Serial.println("Keep joystick centered...");
+
+    long sumX = 0;
+    long sumY = 0;
+
+    for(int i = 0; i < 100; i++)
+    {
+        sumX += analogRead(joystickXPin);
+        sumY += analogRead(joystickYPin);
+        delay(10);
+    }
+
+    centerX = sumX / 100;
+    centerY = sumY / 100;
+
+    Serial.print("Center X = "); Serial.println(centerX);
+    Serial.print("Center Y = "); Serial.println(centerY);
+
+    WiFi.mode(WIFI_STA);
+
+    if(esp_now_init() != ESP_OK)
+    {
+        Serial.println("ESP NOW FAILED");
+        return;
+    }
+
+    esp_now_register_send_cb(OnDataSent);
+
+    esp_now_peer_info_t peerInfo = {};
+    memcpy(peerInfo.peer_addr, roverMAC, 6);
+    peerInfo.channel = 0;
+    peerInfo.encrypt = false;
+
+    esp_now_add_peer(&peerInfo);
+}
+
+// =====================================
+void loop()
+{
+    int xRaw = analogRead(joystickXPin);
+    int yRaw = analogRead(joystickYPin);
+
+    int targetSpeed = 0;
+    char targetCommand = 'Q';
+
+    // 1. Determine TARGET direction and speed based on joystick
+    // FORWARD
+    if(yRaw < centerY - deadzone)
+    {
+        targetSpeed = map(yRaw, 1600, 0, 0, 255);
+        targetSpeed = constrain(targetSpeed, 0, 255);
+        targetCommand = 'W';
+    }
+    // BACKWARD
+    else if(yRaw > centerY + deadzone)
+    {
+        targetSpeed = map(yRaw, 2400, 4095, 0, 255);
+        targetSpeed = constrain(targetSpeed, 0, 255);
+        targetCommand = 'S';
+    }
+    // LEFT
+    else if(xRaw < centerX - deadzone)
+    {
+        targetSpeed = map(xRaw, 1600, 0, 0, 255);
+        targetSpeed = constrain(targetSpeed, 0, 255);
+        targetCommand = 'A';
+    }
+    // RIGHT
+    else if(xRaw > centerX + deadzone)
+    {
+        targetSpeed = map(xRaw, 2400, 4095, 0, 255);
+        targetSpeed = constrain(targetSpeed, 0, 255);
+        targetCommand = 'D';
+    }
+    // STOP
+    else
+    {
+        targetSpeed = 0;
+        targetCommand = 'Q';
+    }
+
+    // 2. RAMPING LOGIC (Prevents Current Spikes)
+    // If we change direction entirely, reset current speed to 0 first to protect the gears/driver
+    if (packet.command != targetCommand && targetCommand != 'Q' && packet.command != 'Q') 
+    {
+        currentSpeed = 0; 
+    }
+
+    // Smoothly step the current speed toward the target speed
+    if (currentSpeed < targetSpeed) 
+    {
+        currentSpeed += MAX_SPEED_CHANGE;
+        if (currentSpeed > targetSpeed) currentSpeed = targetSpeed; // Don't overshoot
+    } 
+    else if (currentSpeed > targetSpeed) 
+    {
+        currentSpeed -= MAX_SPEED_CHANGE;
+        if (currentSpeed < targetSpeed) currentSpeed = targetSpeed; // Don't undershoot
+    }
+
+    // 3. Finalize the packet
+    packet.command = targetCommand;
+    packet.speed = currentSpeed;
+
+    // Send data over ESP-NOW
+    esp_now_send(roverMAC, (uint8_t*)&packet, sizeof(packet));
+
+    Serial.print("CMD="); Serial.print(packet.command);
+    Serial.print(" SPEED="); Serial.println(packet.speed);
+
+    delay(20); // The ramp updates every 20ms
+}
