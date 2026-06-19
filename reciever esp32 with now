@@ -1,0 +1,198 @@
+#include <WiFi.h>
+#include <esp_now.h>
+
+// ==========================================
+// MOTOR PINS
+// ==========================================
+
+const int LEFT_PWM  = ?;
+const int LEFT_DIR  = ?;
+
+const int RIGHT_PWM = ?;
+const int RIGHT_DIR = ?;
+
+// ==========================================
+// RELAY
+// ==========================================
+
+const int RELAY_PIN = 23;
+
+// ==========================================
+// PWM SETTINGS
+// ==========================================
+
+const int PWM_FREQ = 1000;
+const int PWM_RES  = 8;
+
+const int LEFT_CHANNEL  = 0;
+const int RIGHT_CHANNEL = 1;
+
+// ==========================================
+// PACKET
+// ==========================================
+
+struct ControlPacket
+{
+    char command;
+    int speed;
+};
+
+ControlPacket packet;
+
+// ==========================================
+
+void OnDataRecv(
+    const esp_now_recv_info_t *info,
+    const uint8_t *incomingData,
+    int len)
+{
+    memcpy(
+        &packet,
+        incomingData,
+        sizeof(packet)
+    );
+}
+
+// ==========================================
+
+void setup()
+{
+    Serial.begin(115200);
+
+    pinMode(LEFT_DIR, OUTPUT);
+    pinMode(RIGHT_DIR, OUTPUT);
+
+    pinMode(RELAY_PIN, OUTPUT);
+
+    ledcSetup(
+        LEFT_CHANNEL,
+        PWM_FREQ,
+        PWM_RES
+    );
+
+    ledcSetup(
+        RIGHT_CHANNEL,
+        PWM_FREQ,
+        PWM_RES
+    );
+
+    ledcAttachPin(
+        LEFT_PWM,
+        LEFT_CHANNEL
+    );
+
+    ledcAttachPin(
+        RIGHT_PWM,
+        RIGHT_CHANNEL
+    );
+
+    WiFi.mode(WIFI_STA);
+
+    if(esp_now_init() != ESP_OK)
+    {
+        Serial.println("ESP NOW FAILED");
+        return;
+    }
+
+    esp_now_register_recv_cb(OnDataRecv);
+
+    stopRobot();
+
+    Serial.println("ROVER READY");
+}
+
+// ==========================================
+
+void loop()
+{
+    switch(packet.command)
+    {
+        case 'W':
+            moveForward();
+            break;
+
+        case 'S':
+            moveBackward();
+            break;
+
+        case 'A':
+            pivotLeft();
+            break;
+
+        case 'D':
+            pivotRight();
+            break;
+
+        case 'Q':
+            stopRobot();
+            break;
+    }
+
+    delay(20);
+}
+
+// ==========================================
+
+void moveForward()
+{
+    digitalWrite(LEFT_DIR, HIGH);
+    digitalWrite(RIGHT_DIR, HIGH);
+
+    ledcWrite(LEFT_CHANNEL, packet.speed);
+    ledcWrite(RIGHT_CHANNEL, packet.speed);
+}
+
+// ==========================================
+
+void moveBackward()
+{
+    digitalWrite(LEFT_DIR, LOW);
+    digitalWrite(RIGHT_DIR, LOW);
+
+    ledcWrite(LEFT_CHANNEL, packet.speed);
+    ledcWrite(RIGHT_CHANNEL, packet.speed);
+}
+
+// ==========================================
+
+void pivotLeft()
+{
+    digitalWrite(LEFT_DIR, LOW);
+    digitalWrite(RIGHT_DIR, HIGH);
+
+    ledcWrite(LEFT_CHANNEL, packet.speed);
+    ledcWrite(RIGHT_CHANNEL, packet.speed);
+}
+
+// ==========================================
+
+void pivotRight()
+{
+    digitalWrite(LEFT_DIR, HIGH);
+    digitalWrite(RIGHT_DIR, LOW);
+
+    ledcWrite(LEFT_CHANNEL, packet.speed);
+    ledcWrite(RIGHT_CHANNEL, packet.speed);
+}
+
+// ==========================================
+
+void stopRobot()
+{
+    ledcWrite(LEFT_CHANNEL, 0);
+    ledcWrite(RIGHT_CHANNEL, 0);
+}
+
+// ==========================================
+
+void magnetOn()
+{
+    digitalWrite(RELAY_PIN, HIGH);
+}
+
+// ==========================================
+
+void magnetOff()
+{
+    digitalWrite(RELAY_PIN, LOW);
+}
